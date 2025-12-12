@@ -1,6 +1,6 @@
 import axios, { AxiosInstance, AxiosError } from 'axios';
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE || 'http://localhost:3000';
+const API_BASE_URL = import.meta.env.VITE_API_BASE || 'https://customs-backend-9sku.onrender.com';
 
 class ApiClient {
     private client: AxiosInstance;
