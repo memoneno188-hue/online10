@@ -1,0 +1,538 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================
+// Users & Authentication
+// ============================================
+
+model User {
+  id           String   @id @default(uuid())
+  username     String   @unique
+  passwordHash String   @map("password_hash")
+  fullName     String?  @map("full_name")
+  isActive     Boolean  @default(true) @map("is_active")
+  isAdmin      Boolean  @default(false) @map("is_admin")
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  permissions      UserPermission[]
+  auditLogs        AuditLog[]
+  createdVouchers  Voucher[] @relation("CreatedVouchers")
+  approvedPayrolls PayrollRun[] @relation("ApprovedPayrolls")
+
+  @@map("users")
+}
+
+model UserPermission {
+  id        String   @id @default(uuid())
+  userId    String   @map("user_id")
+  screen    String   // Screen identifier (e.g., 'invoices_import', 'customers')
+  canView   Boolean  @default(true) @map("can_view")
+  canCreate Boolean  @default(false) @map("can_create")
+  canEdit   Boolean  @default(false) @map("can_edit")
+  canDelete Boolean  @default(false) @map("can_delete")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, screen])
+  @@map("user_permissions")
+}
+
+// ============================================
+// Customers
+// ============================================
+
+model Customer {
+  id             String        @id @default(uuid())
+  name           String        @unique
+  phone          String?
+  email          String?
+  address        String?
+  type           CustomerType?
+  openingBalance Decimal?      @db.Decimal(18, 6) @map("opening_balance")
+  openingSide    BalanceSide?  @map("opening_side")
+  isActive       Boolean       @default(true) @map("is_active")
+  deletedAt      DateTime?     @map("deleted_at")
+  createdAt      DateTime      @default(now()) @map("created_at")
+  updatedAt      DateTime      @updatedAt @map("updated_at")
+
+  // Relations
+  invoices       Invoice[]
+
+  @@map("customers")
+}
+
+enum CustomerType {
+  EXPORT
+  IMPORT
+  TRANSIT
+  FREE
+}
+
+enum BalanceSide {
+  DEBIT
+  CREDIT
+}
+
+// ============================================
+// Invoices
+// ============================================
+
+model Invoice {
+  id           String        @id @default(uuid())
+  code         String        @unique
+  type         InvoiceType
+  customerId   String        @map("customer_id")
+  customsNo    String?       @map("customs_no")
+  date         DateTime
+  total        Decimal       @db.Decimal(18, 6)
+  currency     String        @default("SAR")
+  exchangeRate Decimal       @default(1) @db.Decimal(18, 6) @map("exchange_rate")
+  notes        String?
+  
+  // Optional fields
+  driverName   String?       @map("driver_name")
+  shipperName  String?       @map("shipper_name")
+  vehicleNo    String?       @map("vehicle_no")
+  cargoType    String?       @map("cargo_type")
+  
+  // VAT (for import invoices)
+  vatEnabled   Boolean       @default(false) @map("vat_enabled")
+  vatRate      Decimal?      @db.Decimal(5, 2) @map("vat_rate")
+  vatAmount    Decimal?      @db.Decimal(18, 6) @map("vat_amount")
+  
+  createdAt    DateTime      @default(now()) @map("created_at")
+  updatedAt    DateTime      @updatedAt @map("updated_at")
+
+  // Relations
+  customer     Customer      @relation(fields: [customerId], references: [id])
+  items        InvoiceItem[]
+
+  @@unique([type, customsNo, date], name: "unique_customs_no_per_year")
+  @@map("invoices")
+}
+
+enum InvoiceType {
+  EXPORT
+  IMPORT
+  TRANSIT
+  FREE
+}
+
+
+model InvoiceItem {
+  id          String  @id @default(uuid())
+  invoiceId   String  @map("invoice_id")
+  description String
+  unitPrice   Decimal @default(0) @db.Decimal(18, 6) @map("unit_price")
+  quantity    Decimal @default(1) @db.Decimal(18, 6)
+  vatRate     Decimal @default(0) @db.Decimal(5, 2) @map("vat_rate")
+  amount      Decimal @db.Decimal(18, 6)
+  hasVat      Boolean @default(false) @map("has_vat")
+  sortOrder   Int     @default(0) @map("sort_order")
+
+  // Relations
+  invoice     Invoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+
+  @@map("invoice_items")
+}
+
+// ============================================
+// Agents (الوكلاء الملاحيين)
+// ============================================
+
+model Agent {
+  id             String   @id @default(uuid())
+  name           String   @unique
+  openingBalance Decimal? @db.Decimal(18, 6) @map("opening_balance")
+  openingSide    BalanceSide? @map("opening_side")
+  isActive       Boolean  @default(true) @map("is_active")
+  deletedAt      DateTime? @map("deleted_at")
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  vessels        Vessel[]
+  trips          Trip[]
+  additionalFees AdditionalFee[]
+
+  @@map("agents")
+}
+
+model Vessel {
+  id        String   @id @default(uuid())
+  agentId   String   @map("agent_id")
+  name      String
+  createdAt DateTime @default(now()) @map("created_at")
+
+  // Relations
+  agent     Agent    @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  trips     Trip[]
+  additionalFees AdditionalFee[]
+
+  @@unique([agentId, name])
+  @@map("vessels")
+}
+
+model Trip {
+  id          String   @id @default(uuid())
+  agentId     String   @map("agent_id")
+  vesselId    String?  @map("vessel_id")
+  date        DateTime
+  quantity    Int      // عدد النوالين/أذون التسليم
+  unitPrice   Decimal  @db.Decimal(18, 6) @map("unit_price")
+  totalAmount Decimal  @db.Decimal(18, 6) @map("total_amount")
+  notes       String?
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  agent       Agent    @relation(fields: [agentId], references: [id])
+  vessel      Vessel?  @relation(fields: [vesselId], references: [id])
+
+  @@map("trips")
+}
+
+model AdditionalFee {
+  id         String   @id @default(uuid())
+  agentId    String   @map("agent_id")
+  vesselId   String?  @map("vessel_id")
+  date       DateTime
+  feeType    String   @map("fee_type")
+  quantity   Int      @default(1)
+  amount     Decimal  @db.Decimal(18, 6)
+  policyNo   String?  @map("policy_no")
+  details    String?
+  createdAt  DateTime @default(now()) @map("created_at")
+  updatedAt  DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  agent      Agent    @relation(fields: [agentId], references: [id])
+  vessel     Vessel?  @relation(fields: [vesselId], references: [id])
+
+  @@map("additional_fees")
+}
+
+// ============================================
+// Accounts - Banks
+// ============================================
+
+model Bank {
+  id        String   @id @default(uuid())
+  name      String   @unique
+  createdAt DateTime @default(now()) @map("created_at")
+
+  // Relations
+  accounts  BankAccount[]
+
+  @@map("banks")
+}
+
+model BankAccount {
+  id             String   @id @default(uuid())
+  bankId         String   @map("bank_id")
+  accountNo      String   @unique @map("account_no")
+  openingBalance Decimal  @default(0) @db.Decimal(18, 6) @map("opening_balance")
+  currentBalance Decimal  @default(0) @db.Decimal(18, 6) @map("current_balance")
+  isActive       Boolean  @default(true) @map("is_active")
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  bank           Bank     @relation(fields: [bankId], references: [id])
+  vouchers       Voucher[]
+
+  @@map("bank_accounts")
+}
+
+// ============================================
+// Accounts - Treasury
+// ============================================
+
+model Treasury {
+  id             String   @id @default("single_row")
+  currentBalance Decimal  @default(0) @db.Decimal(18, 6) @map("current_balance")
+  openingBalance Decimal? @db.Decimal(18, 6) @map("opening_balance")
+  openingSetAt   DateTime? @map("opening_set_at")
+  openingSetBy   String?  @map("opening_set_by")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  @@map("treasury")
+}
+
+model TreasuryTransaction {
+  id           String      @id @default(uuid())
+  date         DateTime
+  type         TxType
+  amount       Decimal     @db.Decimal(18, 6)
+  note         String?
+  balanceAfter Decimal     @db.Decimal(18, 6) @map("balance_after")
+  voucherId    String?     @map("voucher_id")
+  createdBy    String      @map("created_by")
+  createdAt    DateTime    @default(now()) @map("created_at")
+
+  // Relations
+  voucher      Voucher?    @relation("TreasuryTransactions", fields: [voucherId], references: [id])
+
+  @@map("treasury_transactions")
+}
+
+enum TxType {
+  IN
+  OUT
+}
+
+// ============================================
+// Vouchers (السندات)
+// ============================================
+
+model Voucher {
+  id            String       @id @default(uuid())
+  code          String       @unique
+  type          VoucherType
+  partyType     PartyType    @map("party_type")
+  partyId       String?      @map("party_id")
+  partyName     String?      @map("party_name") // For "OTHER" party type
+  method        PaymentMethod
+  bankAccountId String?      @map("bank_account_id")
+  referenceNumber String?    @map("reference_number") // Bank transfer reference
+  amount        Decimal      @db.Decimal(18, 6)
+  note          String?
+  date          DateTime
+  attachments   Json?        // Array of file paths
+  categoryId    String?      @map("category_id") // For payment vouchers
+  createdBy     String       @map("created_by")
+  createdAt     DateTime     @default(now()) @map("created_at")
+  updatedAt     DateTime     @updatedAt @map("updated_at")
+
+  // Relations
+  creator       User         @relation("CreatedVouchers", fields: [createdBy], references: [id])
+  bankAccount   BankAccount? @relation(fields: [bankAccountId], references: [id])
+  category      ExpenseCategory? @relation(fields: [categoryId], references: [id])
+  treasuryTransactions TreasuryTransaction[] @relation("TreasuryTransactions")
+
+  @@map("vouchers")
+}
+
+
+enum VoucherType {
+  RECEIPT
+  PAYMENT
+}
+
+enum PartyType {
+  CUSTOMER
+  EMPLOYEE
+  AGENT
+  OTHER
+}
+
+enum PaymentMethod {
+  CASH
+  BANK_TRANSFER
+}
+
+model ExpenseCategory {
+  id        String    @id @default(uuid())
+  name      String    @unique
+  createdAt DateTime  @default(now()) @map("created_at")
+
+  // Relations
+  vouchers  Voucher[]
+
+  @@map("expense_categories")
+}
+
+
+model InvoiceItemTemplate {
+  id          String   @id @default(uuid())
+  description String   @unique
+  vatRate     Decimal? @default(0) @db.Decimal(5, 2) @map("vat_rate")
+  isActive    Boolean  @default(true) @map("is_active")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  @@map("invoice_item_templates")
+}
+
+model IncomeStatementSettings {
+  id                     String   @id @default("single_row")
+  revenueItemTemplateIds String[] @map("revenue_item_template_ids")
+  expenseCategoryIds     String[] @map("expense_category_ids")
+  updatedAt              DateTime @updatedAt @map("updated_at")
+
+  @@map("income_statement_settings")
+}
+
+// ============================================
+// Employees & Payroll
+// ============================================
+
+model Employee {
+  id               String   @id @default(uuid())
+  name             String
+  department       String?
+  startDate        DateTime? @map("start_date")
+  baseSalary       Decimal  @db.Decimal(18, 6) @map("base_salary")
+  allowances       Decimal  @default(0) @db.Decimal(18, 6)
+  status           EmployeeStatus @default(ACTIVE)
+  isActive         Boolean  @default(true) @map("is_active")
+  deletedAt        DateTime? @map("deleted_at")
+  createdAt        DateTime @default(now()) @map("created_at")
+  updatedAt        DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  payrollItems     PayrollItem[]
+
+  @@map("employees")
+}
+
+enum EmployeeStatus {
+  ACTIVE
+  INACTIVE
+}
+
+model PayrollRun {
+  id         String         @id @default(uuid())
+  month      DateTime       // First day of the month
+  status     PayrollStatus  @default(DRAFT)
+  totalNet   Decimal        @db.Decimal(18, 6) @map("total_net")
+  approvedBy String?        @map("approved_by")
+  approvedAt DateTime?      @map("approved_at")
+  createdAt  DateTime       @default(now()) @map("created_at")
+  updatedAt  DateTime       @updatedAt @map("updated_at")
+
+  // Relations
+  approver   User?          @relation("ApprovedPayrolls", fields: [approvedBy], references: [id])
+  items      PayrollItem[]
+
+  @@unique([month])
+  @@map("payroll_runs")
+}
+
+enum PayrollStatus {
+  DRAFT
+  APPROVED
+}
+
+model PayrollItem {
+  id          String     @id @default(uuid())
+  runId       String     @map("run_id")
+  employeeId  String     @map("employee_id")
+  base        Decimal    @db.Decimal(18, 6)
+  allowances  Decimal    @db.Decimal(18, 6)
+  deductions  Decimal    @db.Decimal(18, 6)
+  net         Decimal    @db.Decimal(18, 6)
+  voucherId   String?    @map("voucher_id") // Link to payment voucher after approval
+
+  // Relations
+  run         PayrollRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+  employee    Employee   @relation(fields: [employeeId], references: [id])
+
+  @@unique([runId, employeeId])
+  @@map("payroll_items")
+}
+
+// ============================================
+// Ledger (Central Accounting)
+// ============================================
+
+model LedgerEntry {
+  id           String      @id @default(uuid())
+  sourceType   SourceType  @map("source_type")
+  sourceId     String      @map("source_id")
+  debitAccount String      @map("debit_account")
+  creditAccount String     @map("credit_account")
+  amount       Decimal     @db.Decimal(18, 6)
+  currency     String      @default("SAR")
+  exchangeRate Decimal     @default(1) @db.Decimal(18, 6) @map("exchange_rate")
+  description  String?
+  createdAt    DateTime    @default(now()) @map("created_at")
+
+  @@map("ledger_entries")
+}
+
+enum SourceType {
+  VOUCHER
+  INVOICE
+  PAYROLL
+  TRIP
+  ADDITIONAL_FEE
+}
+
+// ============================================
+// Audit Logs
+// ============================================
+
+model AuditLog {
+  id        String   @id @default(uuid())
+  userId    String   @map("user_id")
+  action    String
+  entity    String
+  entityId  String   @map("entity_id")
+  before    Json?
+  after     Json?
+  createdAt DateTime @default(now()) @map("created_at")
+
+  // Relations
+  user      User     @relation(fields: [userId], references: [id])
+
+  @@map("audit_logs")
+}
+
+// ============================================
+// Settings
+// ============================================
+
+model CompanySetting {
+  id            String   @id @default("single_row")
+  nameAr        String?  @map("name_ar")
+  nameEn        String?  @map("name_en")
+  activityAr    String?  @map("activity_ar")
+  activityEn    String?  @map("activity_en")
+  taxNumber     String?  @map("tax_number")
+  licenseNo     String?  @map("license_no")
+  email         String?
+  phone         String?
+  addressAr     String?  @map("address_ar")
+  addressEn     String?  @map("address_en")
+  logoPath      String?  @map("logo_path")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  @@map("company_settings")
+}
+
+model AppSetting {
+  id                    String   @id @default("single_row")
+  fontSize              Int      @default(14) @map("font_size")
+  theme                 String   @default("light")
+  language              String   @default("ar")
+  dateFormat            String   @default("dd/MM/yyyy") @map("date_format")
+  defaultCurrency       String   @default("SAR") @map("default_currency")
+  preventNegativeTreasury Boolean @default(true) @map("prevent_negative_treasury")
+  preventNegativeBank   Boolean  @default(true) @map("prevent_negative_bank")
+  updatedAt             DateTime @updatedAt @map("updated_at")
+
+  @@map("app_settings")
+}
+
+model PrintSetting {
+  id                String   @id @default("single_row")
+  headerRightAr     String?  @map("header_right_ar")
+  headerLeftEn      String?  @map("header_left_en")
+  numberingFormat   String   @default("{TYPE}-{YY}-{0001}") @map("numbering_format")
+  updatedAt         DateTime @updatedAt @map("updated_at")
+
+  @@map("print_settings")
+}
